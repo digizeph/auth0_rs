@@ -3,7 +3,6 @@ pub mod error;
 use std::collections::HashMap;
 use serde::Deserialize;
 use serde_json::Value;
-use reqwest;
 use jsonwebtoken::{decode_header, decode, DecodingKey, Validation, Algorithm};
 use crate::error::{new_error, ErrorKind, Auth0Error};
 
@@ -41,8 +40,6 @@ pub struct Jwks {
 
 /// Main struct for auth0_rs library
 pub struct Auth0 {
-    /// Key set URL
-    pub jwks_url: String,
     /// HashMap of JSON web keys with key to be `kid` (key ID), and value to be [`JsonWebKey`].
     pub key_map: HashMap<String, JsonWebKey>
 }
@@ -51,11 +48,45 @@ pub struct Auth0 {
 pub type Claims = Value;
 
 impl Auth0 {
-    /// Create new Auth0 instance.
-    pub fn new(jwks_url: &str) -> Result<Auth0, reqwest::Error>{
-        let keys: Jwks = reqwest::blocking::get(jwks_url)?.json()?;
+    /// Create new Auth0 instance from a JSON web key set (JWKS) str.
+    ///
+    /// Example:
+    /// ```
+    /// use auth0_rs::Auth0;
+    /// let keys = r#"
+    /// {
+    ///     "keys":[
+    ///         {
+    ///           "kty": "RSA",
+    ///           "n": "nzyis1ZjfNB0bBgKFMSvvkTtwlvBsaJq7S5wA-kzeVOVpVWwkWdVha4s38XM_pa_yr47av7-z3VTmvDRyAHcaT92whREFpLv9cj5lTeJSibyr_Mrm_YtjCZVWgaOYIhwrXwKLqPr_11inWsAkfIytvHWTxZYEcXLgAXFuUuaS3uF9gEiNQwzGTU1v0FqkqTBr4B8nW3HCN47XUu0t8Y0e-lf4s4OxQawWD79J9_5d3Ry0vbV3Am1FtGJiJvOwRsIfVChDpYStTcHTCMqtvWbV6L11BWkpzGXSW4Hv43qa-GSYOD2QU68Mb59oSk2OB-BtOLpJofmbGEGgvmwyCI9Mw",
+    ///           "e": "AQAB",
+    ///           "alg": "RS256",
+    ///           "kid": "auth0_rs",
+    ///           "use": "sig"
+    ///         }
+    ///     ]
+    /// }
+    /// "#;
+    /// let auth0 = Auth0::new(keys).unwrap();
+    /// ```
+    ///
+    /// The validated token above would reveal the following claims
+    /// ```no_run
+    /// {
+    /// "aud": "https://github.com/digizeph/auth0_rs",
+    /// "exp": 32520059430,
+    /// "iat": 1625840745,
+    /// "iss": "https://jwt.io",
+    /// "sub": "first-client",
+    /// }
+    /// ```
+    pub fn new(jwks_str: &str) -> Result<Auth0, Auth0Error>{
+        let keys: Jwks = match serde_json::from_str(jwks_str){
+            Ok(k) => k,
+            Err(_) => {return Err(new_error(ErrorKind::InvalidJwksStr))}
+        };
         let key_map = Auth0::jwks_to_keymap(keys);
-        Ok( Auth0 { jwks_url: jwks_url.to_string(), key_map } )
+        Ok( Auth0 { key_map } )
     }
 
     pub fn jwks_to_keymap(keys: Jwks) -> HashMap<String, JsonWebKey> {
@@ -66,13 +97,14 @@ impl Auth0 {
         key_map
     }
 
-    /// Update JSON web keys
-    pub fn update_keys(self: &mut Self) -> Result<(), reqwest::Error> {
-        let keys: Jwks = reqwest::blocking::get(&self.jwks_url)?.json()?;
-        let mut key_map: HashMap<String, JsonWebKey> = HashMap::new();
-        for key in keys.keys {
-            key_map.insert(key.kid.clone(), key.clone());
-        }
+    /// Update JSON web keys.
+    pub fn update_keys(self: &mut Self, jwks_str: &str) -> Result<(), Auth0Error> {
+
+        let keys: Jwks = match serde_json::from_str(jwks_str){
+            Ok(k) => k,
+            Err(_) => {return Err(new_error(ErrorKind::InvalidJwksStr))}
+        };
+        let key_map = Auth0::jwks_to_keymap(keys);
         self.key_map = key_map;
         Ok(())
     }
@@ -119,14 +151,6 @@ mod tests {
     use super::*;
 
     #[test]
-    fn test_auth0_new() {
-        let auth0 = Auth0::new("https://mingwei.us.auth0.com/.well-known/jwks.json");
-        assert_eq!(auth0.is_ok(), true);
-        let auth0 = Auth0::new("https://mingwei.us.auth0.com/.well-known/jwks.jso");
-        assert_eq!(auth0.is_ok(), false);
-    }
-
-    #[test]
     fn test_validation() {
         let keys = r#"
 {
@@ -142,16 +166,12 @@ mod tests {
     ]
 }
 "#;
-        let jwks: Jwks = serde_json::from_str(keys).unwrap();
-
-        let auth0 = Auth0{
-            jwks_url: "".to_string(),
-            key_map: Auth0::jwks_to_keymap(jwks)
-        };
+        let auth0 = Auth0::new(keys).unwrap();
         let token = "eyJhbGciOiJSUzI1NiIsInR5cCI6IkpXVCIsImtpZCI6ImF1dGgwX3JzIn0.eyJpc3MiOiJodHRwczovL2p3dC5pbyIsInN1YiI6ImZpcnN0LWNsaWVudCIsImF1ZCI6Imh0dHBzOi8vZ2l0aHViLmNvbS9kaWdpemVwaC9hdXRoMF9ycyIsImlhdCI6MTYyNTg0MDc0NSwiZXhwIjozMjUyMDA1OTQzMH0.TiKL7yBNdqXGAieHKAnfwhFkoKn4_SXf1UObB31vEzYQWVpBadBP7_DkPAehZs2M0AepzQ74iAt1toNYIObtizXYUTFyJQUQcww1cldltnZ4pv4fs7dPxXDfZvuVnne7JHzJmo4D5uHNnKcsIGxotEYNNA2_PfzNmte9kIkwbZc1yRhegVvv7RQ4vR5ZnstURaNBiQJCL10sPUBZ14p7WBKU1agY_9BWThKOO4LdcYnPXJ8rThnZ42Abxkd-wV1DvtEgJKl6QQYZ9t_4fvKRp6cF9WG5u9GoauyMnGV8-9gV3ccYnM6mVeagN1o6Tn2jHIg4e4L3etzfy73ZmY8RcQ";
         let res = auth0.validate_token(token);
         assert_eq!(res.is_ok(), true);
         let claims = res.unwrap();
+        dbg!(&claims);
         assert_eq!(claims.as_object().unwrap().get("aud").unwrap(), "https://github.com/digizeph/auth0_rs");
     }
 }

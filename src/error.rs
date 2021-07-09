@@ -27,4 +27,6 @@ pub enum ErrorKind {
     TokenMissingKeyId,
     /// No matching key in the JSON web key set
     NoMatchKey,
+    /// Invalid JSON web key set string
+    InvalidJwksStr,
 }
