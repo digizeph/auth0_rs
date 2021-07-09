@@ -6,7 +6,6 @@ use serde_json::Value;
 use reqwest;
 use jsonwebtoken::{decode_header, decode, DecodingKey, Validation, Algorithm};
 use crate::error::{new_error, ErrorKind, Auth0Error};
-use std::collections::hash_map::RandomState;
 
 /// JSON Web Key struct.
 ///
